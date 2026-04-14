@@ -1,3 +1,3 @@
 enum CTXMVVersion {
-    static let current = "0.5.1"
+    static let current = "0.5.2"
 }

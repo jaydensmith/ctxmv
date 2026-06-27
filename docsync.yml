@@ -9,7 +9,7 @@ rules:
   doc: README.md
   message: CLI command surface changed — update README (Usage section) if commands,
     options, or supported agents changed.
-  checksum: 3d737d6565f4112bbc57a625657847cad29953c6868654810a0db458cdfc6ea8
+  checksum: 8acdf8ee1a41632b763c08e791787a4ab1faf272ba94f5befda64c68672353be
 - name: readme-migrators
   sources:
   - Sources/CTXMVKit/Migrators/ClaudeCodeMigrator.swift
@@ -20,7 +20,7 @@ rules:
   doc: README.md
   message: Migrator logic or supported agents changed — update README if supported
     migration paths changed.
-  checksum: f2a463b429651d6f31e9de78fdf5e3484c97680506248ca26c8c13d6f4999183
+  checksum: 9a7fcbca6ae47f2832f8ccc1fd60a6e75b987aed6ee5d8f2eca3b62249d5d2fe
 - name: agents-claude
   sources:
   - Package.swift

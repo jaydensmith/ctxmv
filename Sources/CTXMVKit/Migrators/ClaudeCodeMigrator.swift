@@ -6,61 +6,85 @@ struct ClaudeCodeMigrator: SessionMigrator {
 
     private let fileSystem: any FileSystemProtocol
     private let projectPath: String?
+    /// The shell's logical working directory (`PWD`), read at the CLI boundary. When it is a symlink
+    /// alias of the resolved project path, the session is also written to its bucket. See ``migrate(_:)``.
+    private let logicalCwd: String?
 
     init(
         fileSystem: any FileSystemProtocol = DefaultFileSystem(),
-        projectPath: String? = nil
+        projectPath: String? = nil,
+        logicalCwd: String? = nil
     ) {
         self.fileSystem = fileSystem
         self.projectPath = projectPath
+        self.logicalCwd = logicalCwd
     }
 
     /// Writes the conversation into Claude Code's project-scoped session store.
+    ///
+    /// When the project path is reachable through a symlink alias (e.g. `~/work -> /Volumes/Disk/work`),
+    /// the session is written to *both* aliased project buckets. Claude Code resolves `--resume` against
+    /// the current working directory, so this lets resume succeed whether the user `cd`s into the logical
+    /// or the physical path. See ``ClaudeProjectAliasResolver``.
     func migrate(_ conversation: UnifiedConversation) throws -> MigrationResult {
         guard !conversation.messages.isEmpty else {
             throw MigrationError.sessionEmpty
         }
+        let projectDirs = projectDirectories(forCwd: resolvedCwd(for: conversation))
+        guard let primaryDir = projectDirs.first else {
+            throw MigrationError.writeFailed("No Claude Code project directory resolved")
+        }
+        let origin = migrationOrigin(for: conversation)
 
-        let projectDir = projectDirectory(for: conversation)
-        let originDigest = MigrationDeduplicator.originDigest(for: conversation)
-        let origin = MigrationOrigin(
-            originId: conversation.id,
-            originSource: conversation.source,
-            originMessageCount: conversation.messages.count,
-            originDigest: originDigest
-        )
-
-        if let existing = MigrationDeduplicator.findExistingMigration(
-            origin: origin,
-            in: projectDir,
-            fileSystem: fileSystem,
-            allowBareMetaLine: false
-        ) {
-            throw MigrationError.alreadyMigrated(existingPath: existing)
+        // Dedup across every bucket so a re-migration does not write into one alias while
+        // throwing on another. Note: a session migrated before this multi-bucket behavior existed
+        // lives only in the physical bucket; re-running migration finds it there and throws
+        // `alreadyMigrated` without backfilling the logical bucket. That is intentional (dedup is
+        // keyed on the unchanged source session); such sessions resume from the physical cwd only.
+        for dir in projectDirs {
+            if let existing = MigrationDeduplicator.findExistingMigration(
+                origin: origin,
+                in: dir,
+                fileSystem: fileSystem,
+                allowBareMetaLine: false
+            ) {
+                throw MigrationError.alreadyMigrated(existingPath: existing)
+            }
         }
 
         let sessionId = UUID().uuidString.lowercased()
-        try fileSystem.createDirectory(at: projectDir, withIntermediateDirectories: true, attributes: nil)
-
-        let fileURL = projectDir.appendingPathComponent("\(sessionId).jsonl")
-        let jsonlContent = jsonl(for: conversation, sessionId: sessionId)
-
-        guard let data = jsonlContent.data(using: .utf8) else {
+        guard let data = jsonl(for: conversation, sessionId: sessionId).data(using: .utf8) else {
             throw MigrationError.writeFailed("Failed to encode JSONL as UTF-8")
         }
 
-        _ = fileSystem.createFile(atPath: fileURL.path, contents: data, attributes: nil)
-        logger.info("💾 Wrote Claude Code session messages=\(conversation.messages.count) path=\(fileURL.path)")
-        return .written(path: fileURL.path, sessionID: sessionId)
+        for dir in projectDirs {
+            try fileSystem.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
+            let fileURL = dir.appendingPathComponent("\(sessionId).jsonl")
+            _ = fileSystem.createFile(atPath: fileURL.path, contents: data, attributes: nil)
+            logger.info("💾 Wrote Claude Code session messages=\(conversation.messages.count) path=\(fileURL.path)")
+        }
+
+        let primaryPath = primaryDir.appendingPathComponent("\(sessionId).jsonl").path
+        return .written(path: primaryPath, sessionID: sessionId)
     }
 
-    /// Resolves the `.claude/projects/<encoded-project>` directory for the session.
-    func projectDirectory(for conversation: UnifiedConversation) -> URL {
-        let cwd = projectPath ?? conversation.projectPath ?? FileManager.default.currentDirectoryPath
-        let encoded = encodedProjectPath(for: cwd)
-        return fileSystem.homeDirectoryForCurrentUser
+    /// The resolved physical working directory the session belongs to.
+    private func resolvedCwd(for conversation: UnifiedConversation) -> String {
+        projectPath ?? conversation.projectPath ?? FileManager.default.currentDirectoryPath
+    }
+
+    /// Resolves the project bucket(s) to write the session into: the physical bucket, plus the
+    /// symlink-aliased logical bucket when `logicalCwd` is an alias of `cwd`.
+    func projectDirectories(forCwd cwd: String) -> [URL] {
+        let alias = ClaudeProjectAliasResolver.alias(forPhysicalPath: cwd, logicalCwd: logicalCwd)
+        return ([cwd] + (alias.map { [$0] } ?? [])).map(projectDirectory(forPath:))
+    }
+
+    /// Maps an absolute project path to its `.claude/projects/<encoded>` directory.
+    private func projectDirectory(forPath path: String) -> URL {
+        fileSystem.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/projects")
-            .appendingPathComponent(encoded)
+            .appendingPathComponent(encodedProjectPath(for: path))
     }
 
     /// Claude Code encodes absolute paths by replacing `/` with `-`.

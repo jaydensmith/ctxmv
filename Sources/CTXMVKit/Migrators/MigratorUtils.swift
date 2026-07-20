@@ -24,8 +24,16 @@ enum MigratorUtils {
         return encodedLine
     }
 
-    /// Claude Code `.claude/projects/<this>/` key: absolute path with `/` replaced by `-`.
+    /// Claude Code `.claude/projects/<this>/` key: the absolute path with **every** character that
+    /// is not an ASCII letter or digit replaced by `-`. This mirrors Claude Code's own encoding
+    /// (`path.replace(/[^a-zA-Z0-9]/g, '-')`), which collapses `/`, `_`, `.`, spaces, etc. all to
+    /// `-` — e.g. `/Users/u/web_root/a.b` → `-Users-u-web-root-a-b`. Replacing only `/` writes
+    /// the session into a bucket Claude never reads, so it must match byte-for-byte.
     static func encodedClaudeProjectPath(_ absolutePath: String) -> String {
-        absolutePath.replacingOccurrences(of: "/", with: "-")
+        String(absolutePath.map { isClaudeProjectPathSafe($0) ? $0 : "-" })
+    }
+
+    static func isClaudeProjectPathSafe(_ character: Character) -> Bool {
+        character.isASCII && (character.isLetter || character.isNumber)
     }
 }

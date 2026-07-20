@@ -3,10 +3,13 @@ import Foundation
 /// Picks a workspace directory for `claude --resume` hints when stored `projectPath` may be wrong.
 ///
 /// Claude Code stores sessions under `.claude/projects/<encoded>/` where `encoded` is the absolute
-/// project path with every `/` replaced by `-`. That map is not injective; metadata that decodes an
-/// encoded workspace name by naively turning `-` into `/` can spell a path that does not exist.
-/// This resolver uses the **authoritative** `encoded` directory name (from the written JSONL path),
-/// enumerates every absolute path that re-encodes to it, and picks one that exists on disk.
+/// project path with every non-alphanumeric character replaced by `-` (see
+/// ``MigratorUtils/encodedClaudeProjectPath(_:)``). That map is heavily non-injective: `/`, `-`, `_`,
+/// and `.` all collapse to `-`, so the encoded name cannot be decoded by string surgery — a single
+/// `-` may be a path separator *or* any of several literal characters inside one directory name.
+/// This resolver uses the **authoritative** `encoded` directory name (from the written JSONL path)
+/// and walks the real filesystem, re-encoding each existing directory it visits, to recover the
+/// actual path(s) on disk.
 package enum ProjectPathResolver {
     /// Same encoding as ``ClaudeCodeMigrator/encodedProjectPath(for:)``.
     package static func encodedClaudeProjectPath(_ absolutePath: String) -> String {
@@ -70,100 +73,51 @@ package enum ProjectPathResolver {
         return candidates.first ?? projectPath
     }
 
-    /// Paths `P` with `encodedClaudeProjectPath(P) == encoded` that exist as directories.
+    /// Existing directories `D` with `encodedClaudeProjectPath(D) == encoded`, found by walking the
+    /// real filesystem rather than by decoding the (lossy) `encoded` string.
     package static func existingDirectoryCandidates(
         encoded: String,
         fileSystem: any FileSystemProtocol
     ) -> [String] {
-        var state = DFSState()
-        let componentLists = enumeratePathComponentLists(encoded: encoded, state: &state)
+        guard encoded.hasPrefix("-") else { return [] }
         var results: [String] = []
-        for components in componentLists {
-            let path = "/" + components.joined(separator: "/")
-            let normalized = URL(filePath: path).standardizedFileURL.path
-            guard encodedClaudeProjectPath(normalized) == encoded else { continue }
-            var isDirectory = ObjCBool(false)
-            if fileSystem.fileExists(atPath: normalized, isDirectory: &isDirectory), isDirectory.boolValue {
-                results.append(normalized)
-            }
-        }
+        walkForCandidates(parentPath: "/", remainingEncoded: encoded, fileSystem: fileSystem, results: &results)
         return Array(Set(results)).sorted(by: compareCandidatePaths)
     }
 
-    private struct DFSState {
-        var callCount = 0
-        var maxCalls = 500_000
-    }
+    private static func walkForCandidates(
+        parentPath: String,
+        remainingEncoded: String,
+        fileSystem: any FileSystemProtocol,
+        results: inout [String]
+    ) {
+        guard remainingEncoded.hasPrefix("-") else { return }
+        let afterSeparator = String(remainingEncoded.dropFirst())
+        guard !afterSeparator.isEmpty else { return }
 
-    /// Enumerates every `[String]` such that `"/".joined` re-encodes to `encoded`
-    /// (must match ``encodedClaudeProjectPath``).
-    package static func allPathComponentLists(encoded: String) -> [[String]] {
-        var state = DFSState()
-        return enumeratePathComponentLists(encoded: encoded, state: &state)
-    }
+        let entries = (try? fileSystem.contentsOfDirectory(atPath: parentPath)) ?? []
+        for name in entries {
+            let childPath = parentPath == "/" ? "/" + name : parentPath + "/" + name
+            var isDirectory = ObjCBool(false)
+            guard fileSystem.fileExists(atPath: childPath, isDirectory: &isDirectory), isDirectory.boolValue else {
+                continue
+            }
 
-    private static func enumeratePathComponentLists(encoded: String, state: inout DFSState) -> [[String]] {
-        guard encoded.hasPrefix("-") else { return [] }
-        let body = String(encoded.dropFirst())
-        guard !body.isEmpty else { return [] }
-        return dfs(remaining: body, components: [], encoded: encoded, state: &state)
-    }
+            let encodedName = encodedClaudeProjectPath(name)
+            guard afterSeparator.hasPrefix(encodedName) else { continue }
+            let rest = String(afterSeparator.dropFirst(encodedName.count))
 
-    private static func dfs(
-        remaining: String,
-        components: [String],
-        encoded: String,
-        state: inout DFSState
-    ) -> [[String]] {
-        state.callCount += 1
-        if state.callCount > state.maxCalls {
-            return []
-        }
-
-        let currentPath = "/" + components.joined(separator: "/")
-        let enc = encodedClaudeProjectPath(currentPath)
-        guard encoded.hasPrefix(enc) else { return [] }
-
-        if remaining.isEmpty {
-            return enc == encoded ? [components] : []
-        }
-
-        if !remaining.contains("-") {
-            return dfs(remaining: "", components: components + [remaining], encoded: encoded, state: &state)
-        }
-
-        var results: [[String]] = []
-        // Hyphens in this chunk are literal (one directory name that contains `-` characters).
-        results.append(
-            contentsOf: dfs(remaining: "", components: components + [remaining], encoded: encoded, state: &state)
-        )
-        // Hyphens separate additional path components.
-        for hyphenIndex in remaining.indices where remaining[hyphenIndex] == "-" {
-            results.append(
-                contentsOf: dfsSplit(
-                    remaining: remaining,
-                    at: hyphenIndex,
-                    components: components,
-                    encoded: encoded,
-                    state: &state
+            if rest.isEmpty {
+                results.append(childPath)
+            } else if rest.hasPrefix("-") {
+                walkForCandidates(
+                    parentPath: childPath,
+                    remainingEncoded: rest,
+                    fileSystem: fileSystem,
+                    results: &results
                 )
-            )
+            }
         }
-        return results
-    }
-
-    /// DFS branch for treating the hyphen at `hyphenIndex` as a path-component separator.
-    private static func dfsSplit(
-        remaining: String,
-        at hyphenIndex: String.Index,
-        components: [String],
-        encoded: String,
-        state: inout DFSState
-    ) -> [[String]] {
-        let prefix = String(remaining[..<hyphenIndex])
-        guard !prefix.isEmpty else { return [] }
-        let suffix = String(remaining[remaining.index(after: hyphenIndex)...])
-        return dfs(remaining: suffix, components: components + [prefix], encoded: encoded, state: &state)
     }
 
     /// Prefer shallower paths, then lexicographic (stable, deterministic).

@@ -88,7 +88,7 @@ struct ClaudeCodeMigrator: SessionMigrator {
             .appendingPathComponent(encodedProjectPath(for: path))
     }
 
-    /// Claude Code encodes absolute paths by replacing `/` with `-`.
+    /// Claude Code encodes absolute paths by replacing every non-alphanumeric character with `-`.
     func encodedProjectPath(for path: String) -> String {
         MigratorUtils.encodedClaudeProjectPath(path)
     }

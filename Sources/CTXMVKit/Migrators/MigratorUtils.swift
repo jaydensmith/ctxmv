@@ -18,6 +18,12 @@ enum MigratorUtils {
         data.map { String(format: "%02x", $0) }.joined()
     }
 
+    private static let millisPerSecond = 1000.0
+
+    static func epochMillis(from date: Date) -> Int {
+        Int((date.timeIntervalSince1970 * millisPerSecond).rounded())
+    }
+
     static func encodeLine(_ value: some Encodable) -> String? {
         guard let data = try? jsonEncoder.encode(value),
               let encodedLine = String(data: data, encoding: .utf8) else { return nil }

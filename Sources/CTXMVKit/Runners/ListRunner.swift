@@ -152,6 +152,7 @@ package struct ListRunner {
         case .claudeCode: .cyan
         case .codex: .green
         case .cursor: .magenta
+        case .kimiCode: .blue
         }
     }
 }

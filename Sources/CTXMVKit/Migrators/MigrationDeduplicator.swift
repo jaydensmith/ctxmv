@@ -54,6 +54,16 @@ private struct ClaudeProgressMetaLine: Codable {
 enum MigrationDeduplicator {
     private static let decoder = JSONDecoder()
 
+    /// Prefer the full-history digest; for legacy markers with no digest, fall back to message-count equality.
+    static func matches(_ meta: MigrationMeta, _ origin: MigrationOrigin) -> Bool {
+        guard meta.originId == origin.originId,
+              meta.originSource == origin.originSource.rawValue else { return false }
+        if let metaDigest = meta.originDigest {
+            return metaDigest == origin.originDigest
+        }
+        return meta.originMessageCount == origin.originMessageCount
+    }
+
     static func makeMeta(origin: MigrationOrigin) -> MigrationMeta {
         MigrationMeta(
             type: MigrationMeta.migrationType,
@@ -111,18 +121,7 @@ enum MigrationDeduplicator {
                 fileSystem: fileSystem,
                 allowBareMetaLine: allowBareMetaLine
             ) else { continue }
-            guard meta.originId == origin.originId, meta.originSource == origin.originSource.rawValue else { continue }
-
-            // Strict dedup: prefer digest (full history signature); fall back to message
-            // count equality for legacy files that have no stored digest.
-            if meta.originDigest == origin.originDigest {
-                return file.path
-            }
-            if meta.originDigest != nil {
-                continue
-            }
-
-            if meta.originMessageCount == origin.originMessageCount {
+            if matches(meta, origin) {
                 return file.path
             }
         }

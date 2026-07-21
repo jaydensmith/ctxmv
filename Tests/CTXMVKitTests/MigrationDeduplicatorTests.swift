@@ -201,4 +201,29 @@ struct MigrationDeduplicatorTests {
 
         #expect(existing == nil)
     }
+
+    @Test("matches: digest equality wins; nil digest falls back to message count")
+    func matchesPredicate() {
+        func meta(id: String, digest: String?) -> MigrationMeta {
+            MigrationMeta(
+                type: MigrationMeta.migrationType,
+                originId: id,
+                originSource: "claude-code",
+                originMessageCount: 3,
+                originDigest: digest,
+                targetFormatVersion: nil
+            )
+        }
+        let origin = MigrationOrigin(
+            originId: "s1",
+            originSource: .claudeCode,
+            originMessageCount: 3,
+            originDigest: "abc"
+        )
+
+        #expect(MigrationDeduplicator.matches(meta(id: "s1", digest: "abc"), origin)) // digest match
+        #expect(!MigrationDeduplicator.matches(meta(id: "s1", digest: "zzz"), origin)) // digest mismatch → no
+        #expect(MigrationDeduplicator.matches(meta(id: "s1", digest: nil), origin)) // nil digest → count fallback
+        #expect(!MigrationDeduplicator.matches(meta(id: "other", digest: "abc"), origin)) // id mismatch → no
+    }
 }

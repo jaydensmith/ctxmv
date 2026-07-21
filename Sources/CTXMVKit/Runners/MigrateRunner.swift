@@ -88,7 +88,17 @@ package struct MigrateRunner {
         case .claudeCode: ClaudeCodeMigrator(logicalCwd: ProcessInfo.processInfo.environment["PWD"])
         case .codex: CodexMigrator()
         case .cursor: CursorMigrator()
+        // Same `PWD` rationale as above: kimi's workspace id hashes the root path.
+        case .kimiCode: KimiCodeMigrator(
+                fileSystem: fileSystem,
+                workingDirectoryProvider: Self.logicalWorkingDirectory
+            )
         }
+    }
+
+    /// The shell's logical cwd (symlinks preserved), falling back to the physical one.
+    private static func logicalWorkingDirectory() -> String {
+        ProcessInfo.processInfo.environment["PWD"] ?? FileManager.default.currentDirectoryPath
     }
 
     /// Prints the exact resume command, reusing the existing session path when migration was skipped as a duplicate.
@@ -102,7 +112,7 @@ package struct MigrateRunner {
                 writtenJSONLPath: path,
                 fileSystem: fileSystem
             )
-        case .codex, .cursor:
+        case .codex, .cursor, .kimiCode:
             resolvedProjectPath
         }
         let cwdLine = cwdForHint.map { "  cd \($0)\n" } ?? ""
@@ -141,6 +151,7 @@ package struct MigrateRunner {
         case .claudeCode: "claude --resume \(sessionID)"
         case .codex: "codex resume \(sessionID)"
         case .cursor: "cursor-agent --resume \(sessionID)"
+        case .kimiCode: "kimi --session \(sessionID)"
         }
     }
 
@@ -158,6 +169,9 @@ package struct MigrateRunner {
             return fileName == "store"
                 ? URL(filePath: path).deletingLastPathComponent().lastPathComponent
                 : fileName
+        case .kimiCode:
+            // kimi returns the session directory; its last component is the resumable id.
+            return fileName
         }
     }
 }

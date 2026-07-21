@@ -35,6 +35,7 @@ CLI tool to read, display, export, and migrate conversation sessions across AI c
 - Codex: `~/.codex/sessions/<year>/<month>/<day>/rollout-<date>-<uuid>.jsonl`
 - Cursor (store.db): `~/.cursor/chats/<md5-hash>/<session-id>/store.db`
 - Cursor (transcripts): `~/.cursor/projects/<encoded-workspace>/agent-transcripts/<session-id>.jsonl`
+- Kimi Code: `~/.kimi-code/sessions/wd_<basename>_<sha256(root)[:12]>/session_<id>/agents/main/wire.jsonl` (+ `state.json`; global `session_index.jsonl` / `workspaces.json`)
 
 ## Testing
 
@@ -50,3 +51,4 @@ CLI tool to read, display, export, and migrate conversation sessions across AI c
 - Cursor `--resume` does not render past messages in TUI, but context is preserved
 - Codex records assistant responses in both `event_msg(agent_message)` and `response_item`. Both must be written for resume to restore responses
 - Dedup uses `originId + originSource + originDigest` (SHA-256 of conversation history). Re-migration is allowed when the source session has been updated
+- Kimi Code stores user turns as `turn.prompt` + `context.append_message` with `origin.kind=user`; assistant turns exist ONLY as `context.append_loop_event` (`content.part` type `text`), grouped per turn. `role=user` append_messages with other `origin.kind` (injection/background_task/skill_activation) are NOT user turns. The TUI renders user prompts from `context.append_message` (not `turn.prompt`) and hides only `origin.kind=injection` (plus 3 goal-related `system_trigger` names); any other origin renders as a visible user prompt. So injected source noise (claude `<task-notification>`/`[Subagent]`, command blocks, system reminders — classified via `MessageFilter.isNoise`) must be written as `origin.kind=injection` append_messages with NO `turn.prompt`, and excluded from `state.json` title/lastPrompt. Resume: `kimi --session <id>`. A minimal wire (`metadata` + the user/assistant events above) is sufficient for resume — `config.update`(systemPrompt) and `tools.set_active_tools` can be omitted; kimi injects its own on resume (verified). The `ctxmv_migration` dedup marker lives in `state.json`'s `custom` field (never a wire line), and dedup scans `session_index.jsonl` → each `state.json`.

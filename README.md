@@ -23,6 +23,7 @@
 - Claude Code
 - Codex
 - Cursor (CLI agent via `cursor-agent`, not the GUI app)
+- Kimi Code (`kimi` CLI)
 
 ## Install
 
@@ -75,6 +76,9 @@ ctxmv <session-id> --to claude-code
 
 # Any → Cursor
 ctxmv <session-id> --to cursor
+
+# Any → Kimi Code
+ctxmv <session-id> --to kimi-code
 ```
 
 After migration, the tool prints the resume command:
